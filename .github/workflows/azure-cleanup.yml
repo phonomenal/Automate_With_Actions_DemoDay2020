@@ -1,0 +1,47 @@
+# This is a manual workflow to clean up my Azure Resource Group and save me $$$!
+
+name: Azure Cleanup
+
+on: 
+  ## Could also run on a schedule, but you need to remove the permissin check for the github.actor being the repo owner
+  #schedule:
+  #  - cron: '0 0 * * *' #everyday at midnight
+  workflow_dispatch:
+    inputs:
+      Azure_RG:
+        description: 'Azure Resource Group'     
+        required: true
+
+env:
+  AZURE_WEBAPP_NAME_DEV: james2020reading-dev
+  AZURE_WEBAPP_NAME_QA: james2020reading-qa
+  AZURE_WEBAPP_NAME_PROD: james2020reading
+  AZURE_GROUP_NAME: ghrt3
+  AZURE_LOCATION: eastus
+  ref: '${{github.head_ref}}'
+  prNumber: ${{ github.event.number }}
+
+jobs:
+  permission:
+    name: permission check
+    runs-on: ubuntu-latest
+    if: github.actor == github.event.repository.owner.login
+    steps:
+    - name: check permission
+      run: echo permission pass
+  
+          
+  destroy-azure-rg:
+    name: Destroy QA environment via unlabel
+    needs: permission
+    runs-on: ubuntu-latest
+    steps:
+    - uses: azure/login@v1.1
+      with:
+        creds: ${{ secrets.AZURE_CREDS }}
+        
+        ## Delete the Azure Resource Group with optional [--yes] parameter to NOT prompt for confirmation
+    - run: |
+        az group delete -n ${{ env.AZURE_GROUP_NAME }} --yes
+
+  

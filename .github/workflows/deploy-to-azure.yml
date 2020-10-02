@@ -1,0 +1,464 @@
+name: Deploy .NET Core Reading Time 3
+
+on: [deployment]
+
+env:
+  issue_number: '${{github.event.deployment.payload.issue}}'
+  ref: '${{github.event.deployment.payload.ref}}'
+  deploy_EnvLabel: '${{github.event.deployment.payload.deployEnvLabel}}'
+  deployment_id: '${{github.event.deployment.id}}'
+  AZURE_WEBAPP_NAME_DEV: james2020reading-dev
+  AZURE_WEBAPP_NAME_QA: james2020reading-qa
+  AZURE_WEBAPP_NAME_PROD: james2020reading
+  AZURE_GROUP_NAME: ghrt3
+  AZURE_LOCATION: eastus
+
+jobs:
+  permission:
+    name: permission check
+    runs-on: ubuntu-latest
+    if: github.actor == github.event.repository.owner.login
+    steps:
+    - name: check permission
+      run: echo permission pass
+    - name: Comment Permission Check Fail
+      if: (failure())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':warning: Deployment triggered by context.actor who is NOT the repository owner.'
+          })
+  debug:
+    name: _debug
+    needs: permission
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'debug')
+    steps:
+    - name: context
+      env:
+        GITHUB_CONTEXT: ${{ toJson(github) }}
+      run: echo "$GITHUB_CONTEXT"
+  deployment-to-dev:
+    name: Deployment to DEV via label
+    if: github.event.deployment.payload.deployEnvLabel == 'Deploy-to-DEV'
+    runs-on: ubuntu-latest
+    steps:
+    - name: ACK deployment request
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id, deploy_EnvLabel } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          let deployment_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/deployments/${{env.deployment_id}}`
+          github.repos.createDeploymentStatus({
+            mediaType: {
+              previews: ["flash-preview", "ant-man"]
+            },
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'in_progress',
+            description: 'Kicking off deployment on Azure now.',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '👋 @' + context.actor + ', deployment request: ' + deploy_EnvLabel + ' for Azure received for deployment_id: ' + deployment_id 
+          })
+    - uses: actions/checkout@v2
+      with:
+        ref: ${{ env.ref }}
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 3.1.101
+    - name: Install dependencies
+      run: dotnet restore ./src/ReadingTime3.sln
+    - name: Build
+      run: dotnet build ./src/ReadingTime3.sln --configuration Release --no-restore
+    - name: Test
+      run: dotnet test ./src/ReadingTime3.Web.Tests.Unit/ReadingTime3.Web.Tests.Unit.csproj --configuration Release --no-build --verbosity normal
+    - name: Publish with dotnet
+      run: dotnet publish ./src/ReadingTime3.Web/ReadingTime3.Web.csproj --configuration Release --output ./output
+      
+    - name: Deploy to DEV
+      uses: azure/login@v1
+      with:
+          creds: ${{ secrets.AZURE_CREDS }}
+    - run: |
+        az group create -n ${{ env.AZURE_GROUP_NAME }} -l ${{ env.AZURE_LOCATION }}
+        az group deployment create -n ghaction -g ${{ env.AZURE_GROUP_NAME }} --template-file ./src/ReadingTime3.Web/azure.json --parameters webAppName=${{ env.AZURE_WEBAPP_NAME_DEV }}
+      
+   
+   # Deploy Web App step
+    - name: 'Azure webapp deploy'      
+      uses: azure/webapps-deploy@v1
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME_DEV }}
+        package: './output' 
+
+    # Azure logout 
+    - name: logout
+      run: |
+        az logout
+        
+    # Check the response code of the Azure Website    
+    - name: Wait For HTTP Responses
+      uses: cygnetdigital/wait_for_response@v2.0.0
+      with:
+        url: 'https://${{ env.AZURE_WEBAPP_NAME_DEV }}.azurewebsites.net/'
+        responseCode: '200'
+        timeout: 2000
+        interval: 500
+        
+    # Update Deployment Status, Create Comment, Add Label
+    - name: Update deploy success
+      if: (success())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          let deployment_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/deployments/${{env.deployment_id}}`
+
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'success',
+            description: 'Deployed successfully to Azure',
+            environment_url: 'https://${{ env.AZURE_WEBAPP_NAME_DEV }}.azurewebsites.net/',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':white_check_mark: Deployed successfully to Azure: ' + 'https://${{ env.AZURE_WEBAPP_NAME_DEV }}.azurewebsites.net/'
+          })
+          github.issues.addLabels({
+              issue_number: issue_number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['Azure-DEV-Live']
+          })
+          
+    - name: Update deploy failure
+      if: (failure())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'failure',
+            description: 'Deployment to Azure failed ' :cry:',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':red_circle: Deployment to Azure Failed :cry:. [View failed deployment logs](' + log_url + ').'
+          })
+
+  deployment-to-qa:
+    name: Deployment to QA via label
+    needs: permission
+    if: github.event.deployment.payload.deployEnvLabel == 'Deploy-to-QA'
+    runs-on: ubuntu-latest
+    steps:
+    - name: ACK deployment request
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id, deploy_EnvLabel } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          let deployment_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/deployments/${{env.deployment_id}}`
+          github.repos.createDeploymentStatus({
+            mediaType: {
+              previews: ["flash-preview", "ant-man"]
+            },
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'in_progress',
+            description: 'Kicking off deployment on Azure now.',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '👋 @' + context.actor + ', deployment request: ' + deploy_EnvLabel + ' for Azure received for deployment_id: ' + deployment_id 
+          })
+    - uses: actions/checkout@v2
+      with:
+        ref: ${{ env.ref }}
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 3.1.101
+    - name: Install dependencies
+      run: dotnet restore ./src/ReadingTime3.sln
+    - name: Build
+      run: dotnet build ./src/ReadingTime3.sln --configuration Release --no-restore
+    - name: Test
+      run: dotnet test ./src/ReadingTime3.Web.Tests.Unit/ReadingTime3.Web.Tests.Unit.csproj --configuration Release --no-build --verbosity normal
+    - name: Publish with dotnet
+      run: dotnet publish ./src/ReadingTime3.Web/ReadingTime3.Web.csproj --configuration Release --output ./output
+      
+    - name: Deploy to QA
+      uses: azure/login@v1
+      with:
+          creds: ${{ secrets.AZURE_CREDS }}
+    - run: |
+        az group create -n ${{ env.AZURE_GROUP_NAME }} -l ${{ env.AZURE_LOCATION }}
+        az group deployment create -n ghaction -g ${{ env.AZURE_GROUP_NAME }} --template-file ./src/ReadingTime3.Web/azure.json --parameters webAppName=${{ env.AZURE_WEBAPP_NAME_QA }}
+      
+   
+   # Deploy Web App step
+    - name: 'Azure webapp deploy'      
+      uses: azure/webapps-deploy@v1
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME_QA }}
+        package: './output' 
+
+    # Azure logout 
+    - name: logout
+      run: |
+        az logout
+        
+    # Check the response code of the Azure Website    
+    - name: Wait For HTTP Responses
+      uses: cygnetdigital/wait_for_response@v2.0.0
+      with:
+        url: 'https://${{ env.AZURE_WEBAPP_NAME_QA }}.azurewebsites.net/'
+        responseCode: '200'
+        timeout: 2000
+        interval: 500
+        
+    # Update Deployment Status, Create Comment, Add Label
+    - name: Update deploy success
+      if: (success())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          let deployment_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/deployments/${{env.deployment_id}}`
+
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'success',
+            description: 'Deployed successfully to Azure',
+            environment_url: 'https://${{ env.AZURE_WEBAPP_NAME_QA }}.azurewebsites.net/',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':white_check_mark:  Deployed successfully to Azure: ' + 'https://${{ env.AZURE_WEBAPP_NAME_QA }}.azurewebsites.net/'
+          })
+          github.issues.addLabels({
+              issue_number: issue_number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['Azure-QA-Live']
+          })
+          
+    - name: Update deploy failure
+      if: (failure())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'failure',
+            description: 'Deployment to Azure failed ' :cry:',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':red_circle: Deployment to Azure Failed :cry:. [View failed deployment logs](' + log_url + ').'
+          })
+          github.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: Deployment to Azure Failed: env.AZURE_WEBAPP_NAME_QA
+            body: ':red_circle: Deployment to Azure Failed :cry:. for PR: ' + issue_number
+          })
+
+
+  deployment-to-prod:
+    name: Deployment to PROD via label with proper approvals
+    needs: permission
+    if: github.event.deployment.payload.deployEnvLabel == 'Deploy-to-PROD'
+    runs-on: ubuntu-latest
+    steps:
+    - name: ACK deployment request
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id, deploy_EnvLabel } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          let deployment_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/deployments/${{env.deployment_id}}`
+          github.repos.createDeploymentStatus({
+            mediaType: {
+              previews: ["flash-preview", "ant-man"]
+            },
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'in_progress',
+            description: 'Kicking off deployment on Azure now.',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '👋 @' + context.actor + ', deployment request: ' + deploy_EnvLabel + ' for Azure received for deployment_id: ' + deployment_id 
+          })
+    - uses: actions/checkout@v2
+      with:
+        ref: ${{ env.ref }}
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 3.1.101
+    - name: Install dependencies
+      run: dotnet restore ./src/ReadingTime3.sln
+    - name: Build
+      run: dotnet build ./src/ReadingTime3.sln --configuration Release --no-restore
+    - name: Test
+      run: dotnet test ./src/ReadingTime3.Web.Tests.Unit/ReadingTime3.Web.Tests.Unit.csproj --configuration Release --no-build --verbosity normal
+    - name: Publish with dotnet
+      run: dotnet publish ./src/ReadingTime3.Web/ReadingTime3.Web.csproj --configuration Release --output ./output
+      
+    - name: Deploy to PROD
+      uses: azure/login@v1
+      with:
+          creds: ${{ secrets.AZURE_CREDS }}
+    - run: |
+        az group create -n ${{ env.AZURE_GROUP_NAME }} -l ${{ env.AZURE_LOCATION }}
+        az group deployment create -n ghaction -g ${{ env.AZURE_GROUP_NAME }} --template-file ./src/ReadingTime3.Web/azure.json --parameters webAppName=${{ env.AZURE_WEBAPP_NAME_PROD }}
+      
+   
+   # Deploy Web App step
+    - name: 'Azure webapp deploy'      
+      uses: azure/webapps-deploy@v1
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME_PROD }}
+        package: './output' 
+
+    # Azure logout 
+    - name: logout
+      run: |
+        az logout
+        
+    # Check the response code of the Azure Website    
+    - name: Wait For HTTP Responses
+      uses: cygnetdigital/wait_for_response@v2.0.0
+      with:
+        url: 'https://${{ env.AZURE_WEBAPP_NAME_PROD }}.azurewebsites.net/'
+        responseCode: '200'
+        timeout: 2000
+        interval: 500
+        
+    # Update Deployment Status, Create Comment, Add Label
+    - name: Update deploy success
+      if: (success())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          let deployment_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/deployments/${{env.deployment_id}}`
+
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'success',
+            description: 'Deployed successfully to Azure',
+            environment_url: 'https://${{ env.AZURE_WEBAPP_NAME_PROD }}.azurewebsites.net/',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':white_check_mark:  Deployed successfully to Azure: ' + 'https://${{ env.AZURE_WEBAPP_NAME_PROD }}.azurewebsites.net/'
+          })
+          github.issues.addLabels({
+              issue_number: issue_number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['Azure-PROD-Live']
+          })
+          
+    - name: Update deploy failure
+      if: (failure())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          const { issue_number, deployment_id } = process.env;
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'failure',
+            description: 'Deployment to Azure failed :cry:',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':red_circle: Deployment to Azure Failed :cry:. [View failed deployment logs](' + log_url + ').'
+          })
+          github.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: Deployment to Azure Failed: env.AZURE_WEBAPP_NAME_PROD
+            body: ':red_circle: Deployment to Azure Failed :cry:. for PR: ' + issue_number
+          })

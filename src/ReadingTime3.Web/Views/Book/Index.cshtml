@@ -1,0 +1,56 @@
+﻿@model IEnumerable<ReadingTime3.Web.Models.Book>
+
+@{
+    ViewData["Title"] = "It's Reading Time!";
+}
+
+<h1>It's Reading Time!</h1>
+
+@*
+    <p>
+        <a asp-action="Create">Create New</a>
+    </p>
+*@
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>
+                @Html.DisplayNameFor(model => model.Title)
+            </th>
+            <th>
+                @Html.DisplayNameFor(model => model.Author)
+            </th>
+            <th>
+                @Html.DisplayNameFor(model => model.Cover)
+            </th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var item in Model)
+        {
+            <tr>
+                <td>
+                    @Html.DisplayFor(modelItem => item.Title)
+                </td>
+                <td>
+                    @Html.DisplayFor(modelItem => item.Author)
+                </td>
+                <td>
+                    <a class="thumbnail pull-left" href="#"> <img class="media-object" src="~/img/covers/@item.Cover" style="width: 72px; height: 72px;" /></a>
+                    @*@Html.DisplayFor(modelItem => item.Cover)*@
+                </td>
+                <td>
+                    @*@Html.ActionLink("Edit", "Edit", new { /* id=item.PrimaryKey */ }) |
+                        @Html.ActionLink("Details", "Details", new { /* id=item.PrimaryKey */ }) |
+                        @Html.ActionLink("Delete", "Delete", new { /* id=item.PrimaryKey */ })
+                    *@
+                    <button type="button" class="btn btn-success">
+                        Add to cart
+                    </button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>

@@ -1,0 +1,156 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Azure Teardown
+
+on: 
+ pull_request:
+    types: [unlabeled]
+
+env:
+  AZURE_WEBAPP_NAME_DEV: james2020reading-dev
+  AZURE_WEBAPP_NAME_QA: james2020reading-qa
+  AZURE_WEBAPP_NAME_PROD: james2020reading
+  AZURE_GROUP_NAME: ghrt3
+  AZURE_LOCATION: eastus
+  ref: '${{github.head_ref}}'
+  prNumber: ${{ github.event.number }}
+
+jobs:
+  permission:
+    name: permission check
+    runs-on: ubuntu-latest
+    if: github.actor == github.event.repository.owner.login
+    steps:
+    - name: check permission
+      run: echo permission pass
+    - name: Comment Permission Check Fail
+      if: (failure())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        script: |
+          github.issues.createComment({
+            issue_number: issue_number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':warning: Azure Teardown triggered by context.actor who is NOT the repository owner.'
+          })
+  
+  destroy-azure-dev:
+    name: Destroy DEV environment via unlabel
+    runs-on: ubuntu-latest
+    if: |
+        github.event.label.name == 'Azure-DEV-Live'
+    steps:
+    - uses: azure/login@v1.1
+      with:
+        creds: ${{ secrets.AZURE_CREDS }}
+        
+        ## Delete the Azure Resource Group with optional [--yes] parameter to NOT prompt for confirmation
+    - run: |
+        az webapp delete -n ${{ env.AZURE_WEBAPP_NAME_DEV }} -g ${{ env.AZURE_GROUP_NAME }} 
+
+    ## Get the Deployment
+    - name: Get Deployment ID
+      id: getDeployment
+      uses: James-LeHa/Get_Deployment_ID@1.6
+      with:
+       github-token: ${{secrets.GITHUB_TOKEN}}
+       ref-to-search: ${{ env.ref }}
+       env-name: 'Azure-Deploy-to-DEV'
+    - name: Get the Deployment ID
+      run: echo "The deployment id is ${{ steps.getDeployment.outputs.deploymentId }}"   
+    
+    ## Update the Deployment     
+    - name: Update teardown success
+      if: (success())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        previews: "ant-man"
+        script: |
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID;
+          let deployment_id = '${{ steps.getDeployment.outputs.deploymentId }}';
+          let prNumber = ${{ env.prNumber }}
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'inactive',
+            description: 'Teardown successfully from Azure',
+            environment_url: 'https://${{ env.AZURE_WEBAPP_NAME_DEV }}.azurewebsites.net/',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':x: Teardown successful for Azure: ' + 'https://${{ env.AZURE_WEBAPP_NAME_DEV }}.azurewebsites.net/'
+          })
+          github.issues.removeLabel({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Deploy-to-DEV',
+          })
+          
+  destroy-azure-qa:
+    name: Destroy QA environment via unlabel
+    needs: permission
+    runs-on: ubuntu-latest
+    if: |
+        github.event.label.name == 'Azure-QA-Live'
+    steps:
+    - uses: azure/login@v1.1
+      with:
+        creds: ${{ secrets.AZURE_CREDS }}
+        
+        ## Delete the Azure Resource Group with optional [--yes] parameter to NOT prompt for confirmation
+    - run: |
+        az webapp delete -n ${{ env.AZURE_WEBAPP_NAME_QA }} -g ${{ env.AZURE_GROUP_NAME }} 
+
+    ## Get the Deployment
+    - name: Get Deployment ID
+      id: getDeployment
+      uses: James-LeHa/Get_Deployment_ID@1.6
+      with:
+       github-token: ${{secrets.GITHUB_TOKEN}}
+       ref-to-search: ${{ env.ref }}
+       env-name: 'Azure-Deploy-to-QA'
+    - name: Get the Deployment ID
+      run: echo "The deployment id is ${{ steps.getDeployment.outputs.deploymentId }}"   
+    
+    ## Update the Deployment     
+    - name: Update teardown success
+      if: (success())
+      uses: actions/github-script@0.5.0
+      with:
+        github-token: ${{secrets.GITHUB_TOKEN}}
+        previews: "ant-man"
+        script: |
+          let log_url = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/` + process.env.GITHUB_RUN_ID;
+          let deployment_id = '${{ steps.getDeployment.outputs.deploymentId }}';
+          let prNumber = ${{ env.prNumber }}
+          github.repos.createDeploymentStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            deployment_id: deployment_id,
+            state: 'inactive',
+            description: 'Teardown successfully from Azure',
+            environment_url: 'https://${{ env.AZURE_WEBAPP_NAME_QA }}.azurewebsites.net/',
+            target_url: log_url,
+            log_url: log_url
+          })
+          github.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: ':x: Teardown successful for Azure: ' + 'https://${{ env.AZURE_WEBAPP_NAME_QA }}.azurewebsites.net/'
+          })
+          github.issues.removeLabel({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Deploy-to-QA',
+          })
