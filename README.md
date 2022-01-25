@@ -1,4 +1,6 @@
 # Automate the SDLC with GitHub Actions
+
+[![Git](https://app.soluble.cloud/api/v1/public/badges/fb61185c-b488-4b47-ba7f-57a1048bcecd.svg?orgId=650162616495)](https://app.soluble.cloud/repos/details/github.com/james-leha/automate_with_actions_demoday2020?orgId=650162616495)  
 A public project that shows the power of using GitHub Actions to automate branch creation, creating changes to files, creating comments, assigning users, and deploying from labels.
 
 # Getting Started
